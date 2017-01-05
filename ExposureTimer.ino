@@ -8,24 +8,22 @@
 LiquidCrystal lcd(A5, A4, A3, A2, A1, A0);
 CountUpDownTimer MyTimer(DOWN);
 
-char timer1[8];
-char timer2[] = {"        "};
-char encoder[3];
-char once = 1;
+char message[16];
 bool buttonPressed = 0;
 byte timerHasStarted = 0;
-
-byte menuLevel        = 0xFF;
-byte menuLevelPrev    = 0xFF;
+char seconds, minutes, hours;
+char updateDigit = 0;
+bool bBlink = HIGH;
+volatile unsigned char level = 0;
 
 /***** DEBOUNCE STUFF HERE ******/
 int lastButtonState = HIGH;   // the previous reading from the input pin
 int buttonState;             // the current reading from the input pin
 // the following variables are long's because the time, measured in miliseconds,
 // will quickly become a bigger number than can be stored in an int.
-long lastDebounceTime = 0;  // the last time the output pin was toggled
-long debounceDelay = 50;    // the debounce time; increase if the output flickers
-int buttonCnt, buttonRead;
+unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+int digitSelect, buttonRead;
 /*******************************/
 
 /***** ENCODER STUFF HERE ******/
@@ -33,53 +31,56 @@ int buttonCnt, buttonRead;
 //static int pinB = 3; // Our second hardware interrupt pin is digital pin 3
 volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
 volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
-volatile int encoderPos; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
-volatile int oldEncPos; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
+volatile char encoderPos; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
+volatile char oldEncPos; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
 volatile byte reading = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
+volatile char modifyDigit = 0;
 /*******************************/
 
 void setup() {
   pinMode(2, INPUT_PULLUP);
   pinMode(3, INPUT_PULLUP);
   pinMode(4, INPUT_PULLUP);
-  attachInterrupt(0,PinA,RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
-  attachInterrupt(1,PinB,RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+  attachInterrupt(0, PinA, RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
+  attachInterrupt(1, PinB, RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
   // put your setup code here, to run once:
   //MyTimer.SetTimer(0,3,50);
-//  MyTimer.SetTimer(0,0,10);
-//  MyTimer.StartTimer();
+  //  MyTimer.SetTimer(0,0,10);
+  //  MyTimer.StartTimer();
   // set up the LCD's number of columns and rows:
   lcd.begin(12, 2);
   // Print a message to the LCD.
-//  lcd.setCursor(0, 0);
-//  lcd.print("  Exposure  ");
-//  lcd.setCursor(0, 1);
-//  lcd.print("    Timer   ");
-//  delay(2000);
-//  lcd.clear();
-//  lcd.setCursor(0, 0);
-//  lcd.print("   Version  ");
-//  lcd.setCursor(0, 1);
-//  lcd.print("  v1.00b001 ");
-//  delay(2000);
-//  lcd.clear();
-//  sprintf(timer1,"%02d:%02d:%02d", 0, encoderPos/60, encoderPos%60);
+  lcd.setCursor(0, 0);
+  lcd.print("  Exposure  ");
+  lcd.setCursor(0, 1);
+  lcd.print("    Timer   ");
+  delay(2000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("   Version  ");
+  lcd.setCursor(0, 1);
+  lcd.print("  v1.00b001 ");
+  delay(2000);
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  //  sprintf(message,"%02d:%02d:%02d", 0, encoderPos/60, encoderPos%60);
 }
 void clearLcd()
 {
   lcd.setCursor(0, 0);
-  lcd.print("        ");
+  lcd.print("            ");
   lcd.setCursor(0, 1);
-  lcd.print("        ");
+  lcd.print("            ");
 }
-void PinA(){
+void PinA() {
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
-  if(reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-//    if (encoderPos < ENC_LIMIT_MAX)
-      encoderPos ++; //increment the encoder's position count
-//    else
-//      encoderPos = 0;
+  if (reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    if (!updateDigit)
+      level = !level;
+    else
+      modifyDigit ++;
+    encoderPos ++; //increment the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }
@@ -87,14 +88,15 @@ void PinA(){
   sei(); //restart interrupts
 }
 
-void PinB(){
+void PinB() {
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-//    if (encoderPos == 0)
-//      encoderPos = ENC_LIMIT_MAX;
-//    else  
-      encoderPos --; //decrement the encoder's position count
+    if (!updateDigit)
+      level = !level;
+    else
+      modifyDigit --;
+    encoderPos --; //decrement the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }
@@ -103,89 +105,124 @@ void PinB(){
 }
 
 void loop() {
-//  MyTimer.Timer(); // run the timer
+  MyTimer.Timer(); // run the timer
 
-  WriteString((char*)"Test1",0,0,0);
-  WriteString((char*)"Test2",7,0,1);
-  WriteString((char*)"Test3",0,1,2);
-//  if(oldEncPos != encoderPos)
-//  {
-//    oldEncPos = encoderPos;
-//    clearLcd();
-//  }
-//
-//  if (buttonPressed)
-//    menuLevel = menuLevelPrev;
-//  else
-//    menuLevel = encoderPos;    
-//
-//  lcd.setCursor(0, 0);
-//  switch (menuLevel)
-//  {
-//    case 0:
-//      menuLevelPrev = 0;
-//      lcd.print("Set Timer   ");
-//      if (buttonPressed)
-//      {
-//        sprintf(timer1,"%02d:%02d:%02d", 0, encoderPos/60, encoderPos%60);
-//        MyTimer.SetTimer(0, encoderPos/60, encoderPos%60);
-//      }
-//      break;
-//    case 1:
-//      menuLevelPrev = 1;
-//      if (buttonPressed)
-//      {
-//        lcd.print("Stop        ");
-//        MyTimer.Timer(); // run the timer
-//        timerHasStarted = 1;
-//        if (once)
-//        {
-//          MyTimer.StartTimer();
-//          once = 0;
-//        }
-//      }
-//      else
-//      {             
-//        lcd.print("Start       ");
-//        MyTimer.StopTimer();
-//        MyTimer.ResetTimer();
-//        timerHasStarted = 0;
-//      }
-//
-//      // print the number of seconds since reset:
-//      if (MyTimer.TimeHasChanged())
-//      {
-//        sprintf(timer1,"%02lu:%02lu:%02lu", MyTimer.ShowHours(), MyTimer.ShowMinutes(), MyTimer.ShowSeconds());
-//        clearLcd();
-//      }
-//      
-//      break;
-//    default:
-//      encoderPos = 0;
-//      break;
-//  }
-//
-//  KeyManager();
+  if (oldEncPos != encoderPos)
+  {
+    clearLcd();
+    oldEncPos = encoderPos;
+  }
 
-  // do something when the timer expires
-//  if (MyTimer.TimeCheck() && timerHasStarted)
-//  {
-//    clearLcd();
-//    lcd.setCursor(0, 0);
-//    lcd.print("  DONE  "); 
-//    lcd.setCursor(0, 1);
-//    lcd.print("PRESS A KEY"); 
-//  }
-//  else
-//  {
-//    lcd.setCursor(0, 1);
-//    lcd.print(timer1);
-//  }
+  KeyManager();
+  BlinkMng();
+
+  if (level)
+  {
+    WriteString((char*)"Start", 0, 1, 1);
+    WriteString((char*)">Set", 8, 1, 1);
+  }
+  else
+  {
+    WriteString((char*)"Start<", 0, 1, 1);
+    WriteString((char*)"Set", 9, 1, 1);
+  }
+
+  if (level && updateDigit)
+  {
+    switch (digitSelect)  // set timer
+    {
+      case 0:
+        seconds = modifyDigit;
+        if (seconds > 59)
+        {
+          seconds = 0;
+          encoderPos = 0;
+          modifyDigit = 0;
+        }
+        else if (seconds < 0)
+        {
+          seconds = 59;
+          encoderPos = 59;
+          modifyDigit = 59;
+        }
+        break;
+      case 1:
+        minutes = modifyDigit;
+        if (minutes > 59)
+        {
+          minutes = 0;
+          encoderPos = 0;
+          modifyDigit = 0;
+        }
+        else if (minutes < 0)
+        {
+          minutes = 59;
+          encoderPos = 59;
+          modifyDigit = 59;
+        }
+        break;
+      case 2:
+        hours = modifyDigit;
+        if (hours > 23)
+        {
+          hours = 0;
+          encoderPos = 0;
+          modifyDigit = 0;
+        }
+        else if (hours < 0)
+        {
+          hours = 23;
+          encoderPos = 23;
+          modifyDigit = 23;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (level)  // set timer is selected
+  {
+    if (buttonPressed)  // update timer
+    {
+      updateDigit = 1;
+      WriteString(message, 0, 0, (0x0030 << (digitSelect * 3)) | 2);
+    }
+    else  // display only
+    {
+      updateDigit = 0;
+      WriteString(message, 0, 0, 1);
+    }
+  }
+  else  // start timer is selected
+  {
+    if (buttonPressed && (hours || minutes || seconds)) // check to see if the timer is not zero
+    {
+      // set and start timer
+      MyTimer.SetTimer(hours, minutes, seconds);
+      MyTimer.StartTimer();
+      timerHasStarted = 1;
+    }
+    else
+      WriteString(message, 0, 0, 1);
+  }
+
+  if (MyTimer.TimeHasChanged())
+  {
+    sprintf(message, "  %02d:%02d:%02d  ", 0, (unsigned char)MyTimer.ShowMinutes(), (unsigned char)MyTimer.ShowSeconds());
+    clearLcd();
+    lcd.setCursor(0, 0);
+    lcd.print(message);
+  }
+  else
+    sprintf(message, "  %02d:%02d:%02d  ", hours, minutes, seconds);
+
+  if (MyTimer.TimeCheck())
+    timerHasStarted = 0;
 }
 
 void KeyManager(void)
 {
-  /***** DEBOUNCE STUFF HERE ******/
   buttonRead = digitalRead(4);
 
   // check to see if you just pressed the button
@@ -193,27 +230,50 @@ void KeyManager(void)
   // long enough since the last press to ignore any noise:
 
   // If the switch changed, due to noise or pressing:
-  if (buttonRead != lastButtonState) 
+  if (buttonRead != lastButtonState)
   {
     // reset the debouncing timer
     lastDebounceTime = millis();
   }
 
-  if ((millis() - lastDebounceTime) > debounceDelay) 
+  if ((millis() - lastDebounceTime) > debounceDelay)
   {
     // whatever the reading is at, it's been there for longer
     // than the debounce delay, so take it as the actual current state:
 
     // if the button state has changed:
-    if (buttonRead != buttonState) 
+    if (buttonRead != buttonState)
     {
       buttonState = buttonRead;
 
       // only toggle the LED if the new button state is HIGH
-      if (buttonState == LOW) 
+      if (buttonState == LOW)
       {
-        buttonCnt++;
-        buttonPressed = !buttonPressed; 
+        if (level && updateDigit)  // set timer mode active
+        {
+          if (digitSelect >= 2)
+            digitSelect = 0;
+          else
+            digitSelect++;
+          switch (digitSelect)  // get the last value of the encoder
+          {
+            case 0:
+              encoderPos = seconds;
+              modifyDigit = seconds;
+              break;
+            case 1:
+              encoderPos = minutes;
+              modifyDigit = minutes;
+              break;
+            case 2:
+              encoderPos = hours;
+              modifyDigit = hours;
+              break;
+            default:
+              break;
+          }
+        }
+        buttonPressed = !buttonPressed;
         clearLcd();
       }
     }
@@ -221,32 +281,36 @@ void KeyManager(void)
 
   // save the reading.  Next time through the loop,
   // it'll be the lastButtonState:
-  lastButtonState = buttonRead; 
-/********************************/
+  lastButtonState = buttonRead;
 }
 
 /*
- * Function Name:  WriteString 
- * Description: Write a message at a specified possition on the LCD
- * Paramters: 
- *      msg (in) - message to be displayed in the LCD
- *      x_pos (in) - x posistion on the LCD
- *      y_pos (in) - y posistion on the LCD
- *      option (in) - sets the mode in whitch the message is shown on the LCD
- *                  - starting from the LSB: b0,b1 represent the status bits (ERASE, NORMAL, BLINK),
- *                  the next 12 bits are for blinking the characters individualy
- * Return: void
- */
+   Function Name:  WriteString
+   Description: Write a message at a specified possition on the LCD
+   Paramters:
+        msg (in) - message to be displayed in the LCD
+        x_pos (in) - x posistion on the LCD
+        y_pos (in) - y posistion on the LCD
+        option (in) - sets the mode in whitch the message is shown on the LCD
+                    - starting from the LSB: b0,b1 represent the status bits (ERASE, NORMAL, BLINK),
+                    the next 12 bits are for blinking the characters individualy
+   Return: void
+*/
 void WriteString(char * msg, char x_pos, char y_pos, int option)
 {
-char blank[] = "            "; // string used to clear the line
+  char blank[] = "            "; // string used to clear the line
+  int positions;  // variable to store the blinking bits from the 'option' varible
+  int mask; // masking the individiual bits of the variable 'positions' which represents the position that is blinking of the 12 positions on the LCD
+  unsigned char blink_position = 0;  // current blink position
 
   // check if there is a message to be displayed and
   // that the positions aren't over the limits
   if ((msg == NULL) || (x_pos > 11) || (y_pos > 1))
     return;
 
-  switch (option & 0x02)
+  positions = ((option & 0x3FFC) >> 2);
+
+  switch (option & 0x0003)
   {
     case 0: // erase LCD line
       lcd.setCursor(x_pos, y_pos);
@@ -257,16 +321,63 @@ char blank[] = "            "; // string used to clear the line
       lcd.print(msg);
       break;
     case 2: // blink the message on the LCD line
-      lcd.setCursor(x_pos, y_pos);
-      lcd.print(msg);
-      delay(250);
-      // blink only some of the characters (in this case the 2nd and 3rd ones)
-      for (int i = 1; i < 3; i++)
+      if (bBlink)
       {
-        lcd.setCursor(x_pos+i, y_pos);
-        lcd.print(blank[i]);
+        lcd.setCursor(x_pos, y_pos);
+        lcd.print(msg);
+        //        delay(250);
       }
-      delay(250);
+      else
+      {
+        if (option != 2)
+        {
+          mask = 0x0800;  // start from the first position
+          for (unsigned char i = 0; i < 12; i++)
+          {
+            if (mask & positions) // if the bit is set then that position will blink
+            {
+              // blink the selected position on the LCD
+              lcd.setCursor(x_pos + blink_position, y_pos);
+              lcd.print(blank[blink_position]);
+            }
+            mask = mask >> 1; // mask the next bit
+            blink_position++; // increment the current blink position
+          }
+        }
+        else
+        {
+          for (unsigned char i = x_pos; i < (x_pos + strlen(msg)); i++)
+          {
+            // blink the selected position on the LCD
+            lcd.setCursor(i, y_pos);
+            lcd.print(blank[i]);
+          }
+        }
+        //      delay(250);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+void BlinkMng()
+{
+  static unsigned long timer;
+  static char state = 0;
+
+  switch (state)
+  {
+    case 0: // start
+      timer = millis();
+      state = 1;
+      break;
+    case 1: // wait
+      if ((millis() - timer) >= 250UL)
+      {
+        state = 0;
+        bBlink = !bBlink;
+      }
       break;
     default:
       break;
