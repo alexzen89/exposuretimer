@@ -7,57 +7,36 @@
 
 enum
 {
+  BTN_CUSTOM_1,
+  BTN_CUSTOM_2,
   BTN_UP,
   BTN_DOWN,
-  BTN_ENTER,
-  BTN_EXIT,
   BUTTONS_NO,
   BTN_NONE = 0xFF
-};
-
-typedef struct _stMenu
-{
-  char level;
-  unsigned char * variable;
-  char * msg_line;
-}stMenu;
-
-const stMenu ExposureMenu[2] = 
-{
-  {
-    0x00,
-    NULL,
-    (char*)"Start    Set"    
-  },
-  {
-    0x01,
-    NULL,
-    (char*)"Exit    Next"
-  }
 };
 
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(A5, A4, A3, A2, A1, A0);
 CountUpDownTimer MyTimer(DOWN);
 
-unsigned char currentPressedButton = BTN_NONE;
 char message[16];
-bool buttonPressed = 0;
 byte timerHasStarted = 0;
+byte timerHasStoped = 0;
 char seconds, minutes, hours;
-char updateDigit = 0;
 bool bBlink = HIGH;
 volatile unsigned char level = 0;
-int digitSelect = 0;
+int nextDigit = 0;
 int modifyDigit = 0;
+char processDone = 0;
+byte ctrlPin = 4; // light pin
 
-byte buttonArray[BUTTONS_NO] = {3, 4, 5, 6};
+byte buttonArray[BUTTONS_NO] = {0, 1, 2, 3};
 byte ledArray[BUTTONS_NO] = {7, 11, 12, 13};
 
 // Variables will change:
 byte ledState[4] = {HIGH, HIGH, HIGH, HIGH};           // the current state of the output pin
-byte buttonState[4];                               // the current reading from the input pin
-byte lastButtonState[4] = {LOW, LOW, LOW, LOW};    // the previous reading from the input pin
+volatile byte buttonState[4] = {HIGH, HIGH, HIGH, HIGH};                               // the current reading from the input pin
+volatile byte lastButtonState[4] = {LOW, LOW, LOW, LOW};    // the previous reading from the input pin
 
 // the following variables are long's because the time, measured in miliseconds,
 // will quickly become a bigger number than can be stored in an int.
@@ -65,11 +44,6 @@ unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
 
 void setup() {
   // Make input & enable pull-up resistors on switch pins
-  //  for (byte i = 0; i < NUMBUTTONS; i++)
-  //  {
-  //    pinMode(buttons[i], INPUT_PULLUP);
-  //    //    digitalWrite(buttons[i], HIGH);
-  //  }
   for (byte i = 0; i < BUTTONS_NO; i++)
   {
     pinMode(buttonArray[i], INPUT_PULLUP);
@@ -78,10 +52,10 @@ void setup() {
     digitalWrite(ledArray[i], ledState[i]);
   }
 
-  // put your setup code here, to run once:
-  //MyTimer.SetTimer(0,3,50);
-  //  MyTimer.SetTimer(0,0,10);
-  //  MyTimer.StartTimer();
+  // init the controll pin, which controls the neon lamps
+  pinMode(ctrlPin, OUTPUT);
+  digitalWrite(ctrlPin, LOW);
+
   // set up the LCD's number of columns and rows:
   lcd.begin(12, 2);
   // Print a message to the LCD.
@@ -108,136 +82,235 @@ void clearLcd()
   lcd.print("            ");
 }
 
-void loop() {
-  //  MyTimer.Timer(); // run the timer
+void loop()
+{
+  MyTimer.Timer(); // run the timer
 
   KeyManager();
-  //  BlinkMng();
+  BlinkMng();
 
-  if (currentPressedButton == BTN_ENTER)
+  //  if (level)
+  //  {
+  //    WriteString((char*)"Start", 0, 1, 1);
+  //    WriteString((char*)">Set", 8, 1, 1);
+  //  }
+  //  else
+  //  {
+  //    WriteString((char*)"Start<", 0, 1, 1);
+  //    WriteString((char*)"Set", 9, 1, 1);
+  //  }
+  //
+  if (level)
   {
-    level = !level;
-    currentPressedButton = BTN_NONE;
+    WriteString(message, 0, 0, (0x0030 << (nextDigit * 3)) | 2);
+
+    switch (nextDigit)  // set timer
+    {
+      case 0:
+        //        seconds = modifyDigit;
+        if (seconds > 59)
+        {
+          seconds = 0;
+          //          modifyDigit = 0;
+        }
+        else if (seconds < 0)
+        {
+          seconds = 59;
+          //          modifyDigit = 59;
+        }
+        break;
+      case 1:
+        //        minutes = modifyDigit;
+        if (minutes > 59)
+        {
+          minutes = 0;
+          //          modifyDigit = 0;
+        }
+        else if (minutes < 0)
+        {
+          minutes = 59;
+          //          modifyDigit = 59;
+        }
+        break;
+      case 2:
+        //        hours = modifyDigit;
+        if (hours > 23)
+        {
+          hours = 0;
+          //          modifyDigit = 0;
+        }
+        else if (hours < 0)
+        {
+          hours = 23;
+          //          modifyDigit = 23;
+        }
+        break;
+      default:
+        break;
+    }
+
+    sprintf(message, "  %02d:%02d:%02d  ", hours, minutes, seconds);
+    WriteString((char*)"Exit    Next", 0, 1, 1);
   }
-  WriteString(ExposureMenu[level].msg_line, 0, 1, 1);
-//  WriteString(line2_msg, 0, 1, 1);
+  else
+  {
+    if (timerHasStarted)
+    {
+      if (MyTimer.TimeHasChanged())
+      {
+        sprintf(message, "  %02d:%02d:%02d  ", 0, (unsigned char)MyTimer.ShowMinutes(), (unsigned char)MyTimer.ShowSeconds());
+        clearLcd();
+      }
+      if (timerHasStoped)
+        WriteString((char*)"Resume   Set", 0, 1, 1);
+      else
+        WriteString((char*)"Stop     Set", 0, 1, 1);
+    }
+    else
+    {
+      sprintf(message, "  %02d:%02d:%02d  ", hours, minutes, seconds);
+      if (processDone)
+      {
+        processDone = 0;
+        clearLcd();
+        WriteString((char*)"Process Done", 0, 0, 1);
+        WriteString((char*)" Remove PCB ", 0, 1, 1);
+        delay(3000);
+      }
+      WriteString((char*)"Start    Set", 0, 1, 1);
+    }
+    WriteString(message, 0, 0, 1);
+  }
 
-
-//  if (level)
-//  {
-//    WriteString((char*)"Start", 0, 1, 1);
-//    WriteString((char*)">Set", 8, 1, 1);
-//  }
-//  else
-//  {
-//    WriteString((char*)"Start<", 0, 1, 1);
-//    WriteString((char*)"Set", 9, 1, 1);
-//  }
-//
-//  if (level && updateDigit)
-//  {
-//    switch (digitSelect)  // set timer
-//    {
-//      case 0:
-//        seconds = modifyDigit;
-//        if (seconds > 59)
-//        {
-//          seconds = 0;
-//          modifyDigit = 0;
-//        }
-//        else if (seconds < 0)
-//        {
-//          seconds = 59;
-//          modifyDigit = 59;
-//        }
-//        break;
-//      case 1:
-//        minutes = modifyDigit;
-//        if (minutes > 59)
-//        {
-//          minutes = 0;
-//          modifyDigit = 0;
-//        }
-//        else if (minutes < 0)
-//        {
-//          minutes = 59;
-//          modifyDigit = 59;
-//        }
-//        break;
-//      case 2:
-//        hours = modifyDigit;
-//        if (hours > 23)
-//        {
-//          hours = 0;
-//          modifyDigit = 0;
-//        }
-//        else if (hours < 0)
-//        {
-//          hours = 23;
-//          modifyDigit = 23;
-//        }
-//        break;
-//      default:
-//        break;
-//    }
-//  }
-//
-//  if (level)  // set timer is selected
-//  {
-//    if (buttonPressed)  // update timer
-//    {
-//      updateDigit = 1;
-//      WriteString(message, 0, 0, (0x0030 << (digitSelect * 3)) | 2);
-//    }
-//    else  // display only
-//    {
-//      updateDigit = 0;
-//      WriteString(message, 0, 0, 1);
-//    }
-//  }
-//  else  // start timer is selected
-//  {
-//    if (buttonPressed && (hours || minutes || seconds)) // check to see if the timer is not zero
-//    {
-//      // set and start timer
-//      MyTimer.SetTimer(hours, minutes, seconds);
-//      MyTimer.StartTimer();
-//      timerHasStarted = 1;
-//    }
-//    else
-//      WriteString(message, 0, 0, 1);
-//  }
-//
-//  if (MyTimer.TimeHasChanged())
-//  {
-//    sprintf(message, "  %02d:%02d:%02d  ", 0, (unsigned char)MyTimer.ShowMinutes(), (unsigned char)MyTimer.ShowSeconds());
-//    clearLcd();
-//    lcd.setCursor(0, 0);
-//    lcd.print(message);
-//  }
-//  else
-//    sprintf(message, "  %02d:%02d:%02d  ", hours, minutes, seconds);
-//
-//  if (MyTimer.TimeCheck())
-//    timerHasStarted = 0;
+  if (MyTimer.TimeCheck() && timerHasStarted)  // timer has expired, do something usefull
+  {
+    // turn lights off
+    digitalWrite(ctrlPin, LOW);
+    // reset start
+    processDone = 1;
+    timerHasStarted = 0;
+  }
 }
 
+/*
+   Function Name:   KeyManager
+   Description:     State machine which controlls what the buttons do after they are pressed
+   Paramters:       none
+   Return:          void
+*/
 void KeyManager(void)
 {
-byte key;
+  byte key;
 
   for (key = 0; key < BUTTONS_NO; key++)
   {
-    if(CheckPressed(buttonArray[key], ledArray[key], key))
-      currentPressedButton = key;
+    if (ButtonPressed(buttonArray[key], ledArray[key], key))
+    {
+      switch (key)
+      {
+        case BTN_CUSTOM_1:
+          if (level)
+            level = 0;
+          else
+          {
+            if (!timerHasStarted) // the timer was not running
+            {
+              if (hours || minutes || seconds) // check to see if the timer is not zero)
+              {
+                // set and start timer
+                MyTimer.SetTimer(hours, minutes, seconds);
+                MyTimer.StartTimer();
+                timerHasStarted = 1;
+
+                // turn on the lamps
+                digitalWrite(ctrlPin, HIGH);
+              }
+            }
+            else  // the timer is running, you can stop it
+            {
+              if (timerHasStoped)
+              {
+                MyTimer.ResumeTimer();
+                timerHasStoped = 0;
+              }
+              else
+              {
+                MyTimer.PauseTimer();
+                timerHasStoped = 1;
+              }  
+            }
+          }
+          break;
+        case BTN_CUSTOM_2:
+          if (level)
+          {
+            if (nextDigit < 2)
+              nextDigit++;
+            else
+              nextDigit = 0;
+          }
+          else
+            level = 1;
+          break;
+        case BTN_UP:
+          // update timer value
+          if (level)
+          {
+            switch (nextDigit)
+            {
+              case 0:
+                seconds++;
+                break;
+              case 1:
+                minutes++;
+                break;
+              case 2:
+                hours++;
+                break;
+            }
+          }
+          break;
+        case BTN_DOWN:
+          // update timer value
+          if (level)
+          {
+            switch (nextDigit)
+            {
+              case 0:
+                seconds--;
+                break;
+              case 1:
+                minutes--;
+                break;
+              case 2:
+                hours--;
+                break;
+            }
+          }
+          break;
+        default:
+          break;
+      }
+    }
   }
 }
 
-byte CheckPressed(byte key, byte led, byte index)
+/*
+   Function Name:   ButtonPressed
+   Description:     Check if the buttons are pressed and what buttons are pressed
+   Paramters:
+                    key (in) - hardware pin on the uC for the buttons
+                    byte (in) - hardware pin on the uC for the LEDs, for debuging only
+                    index (in) - index of the button being pressed
+   Return:          state of the buttons, pressed or not
+*/
+byte ButtonPressed(byte key, byte led, byte index)
 {
-byte reading;
-byte isButtonPressed = LOW;
+  byte reading;
+  byte isButtonPressed = LOW;
 
+  // TO DO: add multimple press
+  
   // read the state of the switch into a local variable:
   reading = digitalRead(key);
 
@@ -354,6 +427,13 @@ void WriteString(char * msg, char x_pos, char y_pos, int option)
   }
 }
 
+/*
+   Function Name:   BlinkMng
+   Description:     A little state machine used for the blinking of the LCD messages
+                    which replaces the use of the "delay" function
+   Paramters:       none
+   Return:          void
+*/
 void BlinkMng()
 {
   static unsigned long timer;
